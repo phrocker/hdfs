@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"errors"
 	"os"
 
@@ -10,14 +11,19 @@ import (
 
 // Remove removes the named file or (empty) directory.
 func (c *Client) Remove(name string) error {
-	return delete(c, name, false)
+	return c.RemoveContext(context.Background(), name)
+}
+
+// RemoveContext removes the named file or empty directory, bounded by ctx.
+func (c *Client) RemoveContext(ctx context.Context, name string) error {
+	return deleteContext(ctx, c, name, false)
 }
 
 // RemoveAll removes path and any children it contains. It removes everything it
 // can but returns the first error it encounters. If the path does not exist,
 // RemoveAll returns nil (no error).
 func (c *Client) RemoveAll(name string) error {
-	err := delete(c, name, true)
+	err := deleteContext(context.Background(), c, name, true)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -25,8 +31,8 @@ func (c *Client) RemoveAll(name string) error {
 	return err
 }
 
-func delete(c *Client, name string, recursive bool) error {
-	_, err := c.getFileInfo(name)
+func deleteContext(ctx context.Context, c *Client, name string, recursive bool) error {
+	_, err := c.getFileInfoContext(ctx, name)
 	if err != nil {
 		return &os.PathError{"remove", name, err}
 	}
@@ -37,7 +43,7 @@ func delete(c *Client, name string, recursive bool) error {
 	}
 	resp := &hdfs.DeleteResponseProto{}
 
-	err = c.namenode.Execute("delete", req, resp)
+	err = c.namenode.ExecuteContext(ctx, "delete", req, resp)
 	if err != nil {
 		return &os.PathError{"remove", name, interpretException(err)}
 	} else if resp.Result == nil {

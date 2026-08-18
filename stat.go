@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"os"
 	"path"
 	"time"
@@ -29,10 +30,14 @@ func (c *Client) Stat(name string) (os.FileInfo, error) {
 }
 
 func (c *Client) getFileInfo(name string) (os.FileInfo, error) {
+	return c.getFileInfoContext(context.Background(), name)
+}
+
+func (c *Client) getFileInfoContext(ctx context.Context, name string) (os.FileInfo, error) {
 	req := &hdfs.GetFileInfoRequestProto{Src: proto.String(name)}
 	resp := &hdfs.GetFileInfoResponseProto{}
 
-	err := c.namenode.Execute("getFileInfo", req, resp)
+	err := c.namenode.ExecuteContext(ctx, "getFileInfo", req, resp)
 	if err != nil {
 		return nil, err
 	}

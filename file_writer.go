@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -225,12 +226,27 @@ func (f *FileWriter) Flush() error {
 // error. The Java client, for context, always chooses to retry, with
 // exponential backoff.
 func (f *FileWriter) Close() error {
+	return f.CloseContext(context.Background())
+}
+
+// CloseContext closes the file like Close, but bounds datanode finalization
+// and namenode completion with ctx.
+func (f *FileWriter) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := f.SetDeadline(deadline); err != nil {
+			return err
+		}
+	}
+
 	var lastBlock *hdfs.ExtendedBlockProto
 	if f.blockWriter != nil {
 		lastBlock = f.blockWriter.Block.GetB()
 
 		// Close the blockWriter, flushing any buffered packets.
-		err := f.finalizeBlock()
+		err := f.finalizeBlockContext(ctx)
 		if err != nil {
 			return err
 		}
@@ -244,7 +260,7 @@ func (f *FileWriter) Close() error {
 	}
 	completeResp := &hdfs.CompleteResponseProto{}
 
-	err := f.client.namenode.Execute("complete", completeReq, completeResp)
+	err := f.client.namenode.ExecuteContext(ctx, "complete", completeReq, completeResp)
 	if err != nil {
 		return &os.PathError{"create", f.name, err}
 	} else if completeResp.GetResult() == false {
@@ -299,6 +315,10 @@ func (f *FileWriter) startNewBlock() error {
 }
 
 func (f *FileWriter) finalizeBlock() error {
+	return f.finalizeBlockContext(context.Background())
+}
+
+func (f *FileWriter) finalizeBlockContext(ctx context.Context) error {
 	err := f.blockWriter.Close()
 	if err != nil {
 		return err
@@ -313,7 +333,7 @@ func (f *FileWriter) finalizeBlock() error {
 	}
 	updateResp := &hdfs.UpdateBlockForPipelineResponseProto{}
 
-	err = f.client.namenode.Execute("updateBlockForPipeline", updateReq, updateResp)
+	err = f.client.namenode.ExecuteContext(ctx, "updateBlockForPipeline", updateReq, updateResp)
 	if err != nil {
 		return err
 	}

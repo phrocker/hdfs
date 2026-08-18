@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	hadoop "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_common"
@@ -48,7 +47,7 @@ type NamenodeConnection struct {
 	hostList  []*namenodeHost
 	transport transport
 
-	reqLock sync.Mutex
+	reqLock chan struct{}
 	done    chan struct{}
 }
 
@@ -118,10 +117,12 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 		hostList:  hostList,
 		transport: &basicTransport{clientID: clientId},
 
-		done: make(chan struct{}),
+		reqLock: make(chan struct{}, 1),
+		done:    make(chan struct{}),
 	}
+	c.reqLock <- struct{}{}
 
-	err := c.resolveConnection()
+	err := c.resolveConnection(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +133,7 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 	return c, nil
 }
 
-func (c *NamenodeConnection) resolveConnection() error {
+func (c *NamenodeConnection) resolveConnection(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
@@ -152,10 +153,16 @@ func (c *NamenodeConnection) resolveConnection() error {
 		}
 
 		c.host = host
-		c.conn, err = c.dialFunc(context.Background(), "tcp", host.address)
+		c.conn, err = c.dialFunc(ctx, "tcp", host.address)
 		if err != nil {
 			c.markFailure(err)
 			continue
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			if err = c.conn.SetDeadline(deadline); err != nil {
+				c.markFailure(err)
+				continue
+			}
 		}
 
 		err = c.doNamenodeHandshake()
@@ -186,26 +193,67 @@ func (c *NamenodeConnection) markFailure(err error) {
 // Execute performs an rpc call. It does this by sending req over the wire and
 // unmarshaling the result into resp.
 func (c *NamenodeConnection) Execute(method string, req proto.Message, resp proto.Message) error {
-	c.reqLock.Lock()
-	defer c.reqLock.Unlock()
+	return c.ExecuteContext(context.Background(), method, req, resp)
+}
+
+// ExecuteContext performs an RPC call bounded by ctx. The context deadline is
+// applied before namenode dial and handshake, and while writing and reading the
+// RPC. Waiting for another in-flight RPC is also cancelable.
+func (c *NamenodeConnection) ExecuteContext(ctx context.Context, method string, req proto.Message, resp proto.Message) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.reqLock:
+	}
+	defer func() { c.reqLock <- struct{}{} }()
+	defer func() {
+		if c.conn != nil {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
+	}()
 
 	c.currentRequestID++
 	requestID := c.currentRequestID
 
 	for {
-		err := c.resolveConnection()
+		err := c.resolveConnection(ctx)
 		if err != nil {
+			return contextResult(ctx, err)
+		}
+		conn := c.conn
+		if deadline, ok := ctx.Deadline(); ok {
+			if err = conn.SetDeadline(deadline); err != nil {
+				c.markFailure(err)
+				return err
+			}
+		} else if err = conn.SetDeadline(time.Time{}); err != nil {
+			c.markFailure(err)
 			return err
 		}
+		stopInterrupt := context.AfterFunc(ctx, func() {
+			_ = conn.SetDeadline(time.Now())
+		})
 
-		err = c.transport.writeRequest(c.conn, method, requestID, req)
+		err = c.transport.writeRequest(conn, method, requestID, req)
 		if err != nil {
+			stopInterrupt()
 			c.markFailure(err)
+			if result := contextResult(ctx, nil); result != nil {
+				return result
+			}
 			continue
 		}
 
-		err = c.transport.readResponse(c.conn, method, requestID, resp)
+		err = c.transport.readResponse(conn, method, requestID, resp)
+		stopInterrupt()
 		if err != nil {
+			if ctxErr := contextResult(ctx, nil); ctxErr != nil {
+				c.markFailure(err)
+				return ctxErr
+			}
 			// Only retry on a standby exception.
 			if nerr, ok := err.(*NamenodeError); ok && nerr.exception == standbyExceptionClass {
 				c.markFailure(err)
@@ -217,8 +265,18 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 
 		break
 	}
-
 	return nil
+}
+
+func contextResult(ctx context.Context, fallback error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return fallback
 }
 
 // A handshake packet:
@@ -232,8 +290,8 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 // |  Auth protocol, 1 byte (Auth method None = 0x00)          |
 // +-----------------------------------------------------------+
 //
-//  If the auth protocol is something other than 'none', the authentication
-//  handshake happens here. Otherwise, everything can be sent as one packet.
+//	If the auth protocol is something other than 'none', the authentication
+//	handshake happens here. Otherwise, everything can be sent as one packet.
 //
 // +-----------------------------------------------------------+
 // |  uint32 length of the next two parts                      |
@@ -302,8 +360,8 @@ func (c *NamenodeConnection) Close() error {
 	close(c.done)
 
 	// Ensure that we're not concurrently renewing leases.
-	c.reqLock.Lock()
-	defer c.reqLock.Unlock()
+	<-c.reqLock
+	defer func() { c.reqLock <- struct{}{} }()
 
 	if c.conn != nil {
 		return c.conn.Close()

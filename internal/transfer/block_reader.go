@@ -162,20 +162,33 @@ func (br *BlockReader) connectNext() error {
 		br.DialFunc = (&net.Dialer{}).DialContext
 	}
 
-	conn, err := br.DialFunc(context.Background(), "tcp", address)
+	dialCtx := context.Background()
+	cancel := func() {}
+	if !br.deadline.IsZero() {
+		dialCtx, cancel = context.WithDeadline(dialCtx, br.deadline)
+	}
+	defer cancel()
+	conn, err := br.DialFunc(dialCtx, "tcp", address)
 	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(br.deadline); err != nil {
+		conn.Close()
 		return err
 	}
 
 	err = br.writeBlockReadRequest(conn)
 	if err != nil {
+		conn.Close()
 		return err
 	}
 
 	resp, err := readBlockOpResponse(conn)
 	if err != nil {
+		conn.Close()
 		return err
 	} else if resp.GetStatus() != hdfs.Status_SUCCESS {
+		conn.Close()
 		return fmt.Errorf("read failed: %s (%s)", resp.GetStatus().String(), resp.GetMessage())
 	}
 
@@ -220,11 +233,6 @@ func (br *BlockReader) connectNext() error {
 
 	br.stream = stream
 	br.conn = conn
-	err = br.conn.SetDeadline(br.deadline)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 

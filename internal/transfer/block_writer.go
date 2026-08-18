@@ -126,13 +126,20 @@ func (bw *BlockWriter) connectNext() error {
 		bw.DialFunc = (&net.Dialer{}).DialContext
 	}
 
-	conn, err := bw.DialFunc(context.Background(), "tcp", address)
+	dialCtx := context.Background()
+	cancel := func() {}
+	if !bw.deadline.IsZero() {
+		dialCtx, cancel = context.WithDeadline(dialCtx, bw.deadline)
+	}
+	defer cancel()
+	conn, err := bw.DialFunc(dialCtx, "tcp", address)
 	if err != nil {
 		return err
 	}
 
 	err = conn.SetDeadline(bw.deadline)
 	if err != nil {
+		conn.Close()
 		return err
 	}
 

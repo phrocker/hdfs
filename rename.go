@@ -40,6 +40,9 @@ func (c *Client) RenameContext(ctx context.Context, oldpath, newpath string) err
 // absent. The namenode enforces the condition in rename2; a separate Stat
 // check would race with another writer and must not be used as the fence.
 func (c *Client) RenameNoOverwriteContext(ctx context.Context, oldpath, newpath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -49,7 +52,12 @@ func (c *Client) RenameNoOverwriteContext(ctx context.Context, oldpath, newpath 
 	}
 	resp := &hdfs.Rename2ResponseProto{}
 	if err := c.namenode.ExecuteContext(ctx, "rename2", req, resp); err != nil {
-		return &os.PathError{Op: "rename", Path: newpath, Err: interpretException(err)}
+		mapped := interpretException(err)
+		path := oldpath
+		if os.IsExist(mapped) {
+			path = newpath
+		}
+		return &os.PathError{Op: "rename", Path: path, Err: mapped}
 	}
 	return nil
 }

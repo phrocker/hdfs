@@ -1,6 +1,8 @@
 package hdfs
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -23,6 +25,36 @@ func TestRename(t *testing.T) {
 
 	fi, err = client.Stat("/_test/tomovedest")
 	require.NoError(t, err)
+}
+
+func TestRenameNoOverwriteContext(t *testing.T) {
+	client := getClient(t)
+	const source = "/_test/no-overwrite-src"
+	const target = "/_test/no-overwrite-dst"
+	baleet(t, source)
+	baleet(t, target)
+	touch(t, source)
+	if err := client.RenameNoOverwriteContext(context.Background(), source, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Stat(target); err != nil {
+		t.Fatalf("target after rename: %v", err)
+	}
+	if _, err := client.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source after rename: %v", err)
+	}
+	touch(t, source)
+	if err := client.RenameNoOverwriteContext(context.Background(), source, target); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing target overwritten: %v", err)
+	}
+	if _, err := client.Stat(source); err != nil {
+		t.Fatalf("losing source removed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.RenameNoOverwriteContext(ctx, source, target); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled rename = %v", err)
+	}
 }
 
 func TestRenameSrcNotExistent(t *testing.T) {

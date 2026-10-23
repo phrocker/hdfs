@@ -2,6 +2,7 @@ name: Tests
 
 on:
   push:
+    branches: [ master, shoal-operation-context ]
   pull_request:
     branches: [ master, shoal-operation-context ]
   workflow_dispatch:

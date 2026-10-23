@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -40,7 +41,10 @@ func TestDigestMD5ConnBufferedRead(t *testing.T) {
 			}
 			written := make(chan error, 1)
 			go func() {
-				_, err := sender.Write([]byte("abc"))
+				n, err := sender.Write([]byte("abc"))
+				if err == nil && n != 3 {
+					err = fmt.Errorf("Write reported %d bytes, want 3", n)
+				}
 				written <- err
 			}()
 

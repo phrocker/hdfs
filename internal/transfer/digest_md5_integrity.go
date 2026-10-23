@@ -81,8 +81,11 @@ func (d *digestMD5IntegrityConn) Write(b []byte) (n int, err error) {
 	binary.Write(&d.writeBuf, binary.BigEndian, int32(d.sendSeqNum))
 
 	d.sendSeqNum++
-	wr, err := d.writeBuf.WriteTo(d.conn)
-	return int(wr), err
+	_, err = d.writeBuf.WriteTo(d.conn)
+	if err != nil {
+		return 0, err
+	}
+	return inputLen, nil
 }
 
 // Read will decode the underlying bytes and then copy them from our

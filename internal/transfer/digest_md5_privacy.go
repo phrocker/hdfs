@@ -157,6 +157,9 @@ func (d *digestMD5PrivacyConn) Write(b []byte) (int, error) {
 	binary.Write(&d.writeBuf, binary.BigEndian, int32(d.sendSeqNum))
 
 	d.sendSeqNum++
-	n, err := d.writeBuf.WriteTo(d.conn)
-	return int(n), err
+	_, err := d.writeBuf.WriteTo(d.conn)
+	if err != nil {
+		return 0, err
+	}
+	return inputLen, nil
 }

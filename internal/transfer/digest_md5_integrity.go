@@ -92,31 +92,33 @@ func (d *digestMD5IntegrityConn) Read(b []byte) (int, error) {
 		return 0, syscall.ETIMEDOUT
 	}
 
-	n, err := d.readBuf.Read(b)
-	if len(b) == n || (err != nil && err != io.EOF) {
-		return n, err
+	if len(b) == 0 {
+		return 0, nil
+	}
+	if d.readBuf.Len() > 0 {
+		return d.readBuf.Read(b)
 	}
 
 	var sz int32
-	err = binary.Read(d.conn, binary.BigEndian, &sz)
+	err := binary.Read(d.conn, binary.BigEndian, &sz)
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
 	d.readBuf.Reset()
 	d.readBuf.Grow(int(sz))
 	_, err = io.CopyN(&d.readBuf, d.conn, int64(sz))
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
 	decoded, err := d.decode(d.readBuf.Bytes())
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
 	d.readBuf.Truncate(len(decoded))
-	return d.readBuf.Read(b[n:])
+	return d.readBuf.Read(b)
 }
 
 // decode will decode a message from the server and perform the integrity
@@ -150,7 +152,7 @@ func (d *digestMD5IntegrityConn) decode(input []byte) ([]byte, error) {
 
 // msgHMAC implements the HMAC wrapper per the RFC:
 //
-//     HMAC(ki, {seqnum, msg})[0..9].
+//	HMAC(ki, {seqnum, msg})[0..9].
 func msgHMAC(mac hash.Hash, seq [4]byte, msg []byte) []byte {
 	mac.Reset()
 	mac.Write(seq[:])

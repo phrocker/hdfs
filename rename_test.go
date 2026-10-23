@@ -57,6 +57,19 @@ func TestRenameNoOverwriteContext(t *testing.T) {
 	if _, err := client.Stat(source); err != nil {
 		t.Fatalf("losing source removed: %v", err)
 	}
+	baleet(t, target)
+	if err := client.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RenameNoOverwriteContext(context.Background(), source, target); err == nil {
+		t.Fatal("source moved into existing target directory")
+	}
+	if _, err := client.Stat(source); err != nil {
+		t.Fatalf("source removed after directory collision: %v", err)
+	}
+	if _, err := client.Stat(target + "/no-overwrite-src"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source appeared inside target directory: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := client.RenameNoOverwriteContext(ctx, source, target); !errors.Is(err, context.Canceled) {

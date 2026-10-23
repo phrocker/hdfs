@@ -35,3 +35,29 @@ func (c *Client) RenameContext(ctx context.Context, oldpath, newpath string) err
 
 	return nil
 }
+
+// RenameNoOverwriteContext atomically moves src to dst only while dst is
+// absent. The namenode enforces the condition in rename2; a separate Stat
+// check would race with another writer and must not be used as the fence.
+func (c *Client) RenameNoOverwriteContext(ctx context.Context, oldpath, newpath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req := &hdfs.Rename2RequestProto{
+		Src: proto.String(oldpath), Dst: proto.String(newpath),
+		OverwriteDest: proto.Bool(false),
+	}
+	resp := &hdfs.Rename2ResponseProto{}
+	if err := c.namenode.ExecuteContext(ctx, "rename2", req, resp); err != nil {
+		mapped := interpretException(err)
+		path := oldpath
+		if os.IsExist(mapped) {
+			path = newpath
+		}
+		return &os.PathError{Op: "rename", Path: path, Err: mapped}
+	}
+	return nil
+}

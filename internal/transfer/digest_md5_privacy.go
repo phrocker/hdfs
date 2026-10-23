@@ -77,13 +77,15 @@ func (d *digestMD5PrivacyConn) Read(b []byte) (int, error) {
 		return 0, syscall.ETIMEDOUT
 	}
 
-	n, err := d.readBuf.Read(b)
-	if len(b) == n || (err != nil && err != io.EOF) {
-		return n, err
+	if len(b) == 0 {
+		return 0, nil
+	}
+	if d.readBuf.Len() > 0 {
+		return d.readBuf.Read(b)
 	}
 
 	var sz int32
-	err = binary.Read(d.conn, binary.BigEndian, &sz)
+	err := binary.Read(d.conn, binary.BigEndian, &sz)
 	if err != nil {
 		return 0, err
 	}
@@ -92,16 +94,16 @@ func (d *digestMD5PrivacyConn) Read(b []byte) (int, error) {
 	d.readBuf.Grow(int(sz))
 	_, err = io.CopyN(&d.readBuf, d.conn, int64(sz))
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
 	decoded, err := d.decode(d.readBuf.Bytes())
 	if err != nil {
-		return n, err
+		return 0, err
 	}
 
 	d.readBuf.Truncate(len(decoded))
-	return d.readBuf.Read(b[n:])
+	return d.readBuf.Read(b)
 }
 
 func (d *digestMD5PrivacyConn) decode(input []byte) (out []byte, err error) {
@@ -155,6 +157,9 @@ func (d *digestMD5PrivacyConn) Write(b []byte) (int, error) {
 	binary.Write(&d.writeBuf, binary.BigEndian, int32(d.sendSeqNum))
 
 	d.sendSeqNum++
-	n, err := d.writeBuf.WriteTo(d.conn)
-	return int(n), err
+	_, err := d.writeBuf.WriteTo(d.conn)
+	if err != nil {
+		return 0, err
+	}
+	return inputLen, nil
 }

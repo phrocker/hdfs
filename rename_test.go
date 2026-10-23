@@ -1,6 +1,8 @@
 package hdfs
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -23,6 +25,56 @@ func TestRename(t *testing.T) {
 
 	fi, err = client.Stat("/_test/tomovedest")
 	require.NoError(t, err)
+}
+
+func TestRenameNoOverwriteContext(t *testing.T) {
+	client := getClient(t)
+	const source = "/_test/no-overwrite-src"
+	const target = "/_test/no-overwrite-dst"
+	baleet(t, source)
+	baleet(t, target)
+	touch(t, source)
+	if err := client.RenameNoOverwriteContext(nil, source, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Stat(target); err != nil {
+		t.Fatalf("target after rename: %v", err)
+	}
+	if _, err := client.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source after rename: %v", err)
+	}
+	if err := client.RenameNoOverwriteContext(context.Background(), source, "/_test/missing-source-target"); err == nil {
+		t.Fatal("missing source rename succeeded")
+	} else {
+		assertPathError(t, err, "rename", source, os.ErrNotExist)
+	}
+	touch(t, source)
+	if err := client.RenameNoOverwriteContext(context.Background(), source, target); err == nil {
+		t.Fatal("existing target overwritten")
+	} else {
+		assertPathError(t, err, "rename", target, os.ErrExist)
+	}
+	if _, err := client.Stat(source); err != nil {
+		t.Fatalf("losing source removed: %v", err)
+	}
+	baleet(t, target)
+	if err := client.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RenameNoOverwriteContext(context.Background(), source, target); err == nil {
+		t.Fatal("source moved into existing target directory")
+	}
+	if _, err := client.Stat(source); err != nil {
+		t.Fatalf("source removed after directory collision: %v", err)
+	}
+	if _, err := client.Stat(target + "/no-overwrite-src"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source appeared inside target directory: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.RenameNoOverwriteContext(ctx, source, target); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled rename = %v", err)
+	}
 }
 
 func TestRenameSrcNotExistent(t *testing.T) {

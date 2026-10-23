@@ -2,8 +2,10 @@
 
 set -e
 
-KERBEROS=${KERBEROS-"false"}
-AES=${AES-"false"}
+KERBEROS=${KERBEROS:-false}
+AES=${AES:-false}
+RPC_PROTECTION=${RPC_PROTECTION:-authentication}
+DATA_TRANSFER_PROTECTION=${TRANSFER_PROTECTION:-}
 if [ "$DATA_TRANSFER_PROTECTION" = "privacy" ]; then
   KERBEROS="true"
   ENCRYPT_DATA_TRANSFER="true"
@@ -19,7 +21,7 @@ CONF_AUTHENTICATION="simple"
 KERBEROS_REALM="EXAMPLE.COM"
 KERBEROS_PRINCIPLE="administrator"
 KERBEROS_PASSWORD="password1234"
-if [ $KERBEROS = "true" ]; then
+if [ "$KERBEROS" = "true" ]; then
   CONF_AUTHENTICATION="kerberos"
 
   HOSTNAME=$(hostname)
@@ -70,9 +72,22 @@ EOF
   done
 fi
 
-URL="https://dlcdn.apache.org/hadoop/core/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz"
+case "$HADOOP_VERSION" in
+  2.10.1)
+    SHA512=2460e02cd1f80dfed7a8981bbc934c095c0a341435118bec781fd835ec2ebdc5543a03d92d24f2ddeebdfe1c2c460065ba1d394ed9a73cbb2020b40a8d8b5e07
+    ;;
+  3.3.1)
+    SHA512=2fd0bf74852c797dc864f373ec82ffaa1e98706b309b30d1effa91ac399b477e1accc1ee74d4ccbb1db7da1c5c541b72e4a834f131a99f2814b030fbd043df66
+    ;;
+  *)
+    echo "Unverified Hadoop version: $HADOOP_VERSION" >&2
+    exit 1
+    ;;
+esac
+URL="https://repo.huaweicloud.com/apache/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz"
 echo "Downloading $URL"
-curl -o hadoop.tar.gz $URL
+curl --fail --location --retry 3 --connect-timeout 30 --max-time 900 -o hadoop.tar.gz "$URL"
+printf '%s  %s\n' "$SHA512" hadoop.tar.gz | sha512sum --check -
 tar zxf hadoop.tar.gz
 
 HADOOP_ROOT="hadoop-${HADOOP_VERSION}/"

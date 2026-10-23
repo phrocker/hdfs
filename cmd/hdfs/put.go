@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/colinmarc/hdfs/v2"
 )
@@ -58,9 +59,14 @@ func putFromStdin(client *hdfs.Client, dest string) {
 	if err != nil {
 		fatal(err)
 	}
-	defer writer.Close()
-
-	io.Copy(writer, os.Stdin)
+	_, copyErr := io.Copy(writer, os.Stdin)
+	closeErr := closeUploadedFile(writer)
+	if copyErr != nil {
+		fatal(copyErr)
+	}
+	if closeErr != nil {
+		fatal(closeErr)
+	}
 }
 
 func putFromFile(client *hdfs.Client, source string, dest string) {
@@ -93,22 +99,25 @@ func putFromFile(client *hdfs.Client, source string, dest string) {
 		if fi.IsDir() {
 			client.Mkdir(fullDest, mode)
 		} else {
-			writer, err := client.Create(fullDest)
-			if err != nil {
-				return err
-			}
-
-			defer writer.Close()
 			reader, err := os.Open(p)
 			if err != nil {
 				return err
 			}
-
-			defer reader.Close()
-			_, err = io.Copy(writer, reader)
+			writer, err := client.Create(fullDest)
 			if err != nil {
+				reader.Close()
 				return err
 			}
+			_, copyErr := io.Copy(writer, reader)
+			readCloseErr := reader.Close()
+			writeCloseErr := closeUploadedFile(writer)
+			if copyErr != nil {
+				return copyErr
+			}
+			if readCloseErr != nil {
+				return readCloseErr
+			}
+			return writeCloseErr
 		}
 
 		return nil
@@ -117,4 +126,19 @@ func putFromFile(client *hdfs.Client, source string, dest string) {
 	if err != nil {
 		fatal(err)
 	}
+}
+
+func closeUploadedFile(writer *hdfs.FileWriter) error {
+	const maxAttempts = 20
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err = writer.Close()
+		if !hdfs.IsErrReplicating(err) {
+			return err
+		}
+		if attempt+1 < maxAttempts {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return err
 }
